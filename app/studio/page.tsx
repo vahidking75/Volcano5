@@ -2,106 +2,90 @@
 
 import { useMemo, useState } from 'react';
 
+import { LearningModeSwitch } from '../../components/LearningModeSwitch';
+import { ModeSwitch } from '../../components/ModeSwitch';
+import { PromptBuilder } from '../../components/PromptBuilder';
+import { AssistantPanel } from '../../components/AssistantPanel';
+import { OnlineWorkbench } from '../../components/OnlineWorkbench';
+import { PromptOutput } from '../../components/PromptOutput';
+import { ClarityCheck } from '../../components/ClarityCheck';
+import { ProjectBar } from '../../components/ProjectBar';
+
 import type { VolcanoModel } from '../../engine/modelProfiles';
 import type { LearningMode } from '../../engine/learningModes';
 import { LEARNING_MODE } from '../../engine/learningModes';
 
-import type { PromptFields, PromptFieldKey } from '../../engine/promptSchema';
-import { DEFAULT_FIELDS } from '../../engine/promptSchema';
-
-import { compileFromFields } from '../../engine/promptCompiler';
-import { lintFromFields } from '../../engine/qualityLinter';
-import { suggestForModel } from '../../engine/modelAdvisor';
-import { suggestModifiersFromFields } from '../../engine/modifierSuggester';
-import { assistantBrain } from '../../engine/assistantBrain';
+import { EMPTY_FIELDS, type PromptFields, type PromptFieldKey } from '../../engine/promptSchema';
 import { addSmart } from '../../engine/tokenRouter';
-
-import { LearningModeSwitch } from '../../components/LearningModeSwitch';
-import { ModeSwitch } from '../../components/ModeSwitch';
-import { PromptBuilder } from '../../components/PromptBuilder';
-import { PromptPreviewV4 } from '../../components/PromptPreviewV4';
-import { AssistantPanel } from '../../components/AssistantPanel';
-import { OnlineWorkbench } from '../../components/OnlineWorkbench';
-import { StyleDNABlender } from '../../components/StyleDNABlender';
-import { ColorIntelligence } from '../../components/ColorIntelligence';
-import { ImageReferenceInput } from '../../components/ImageReferenceInput';
-import { ExplainPrompt } from '../../components/ExplainPrompt';
-import { ProjectBar } from '../../components/ProjectBar';
-
-type TabKey = 'online' | 'style' | 'color' | 'image' | 'explain';
+import { analyzePrompt } from '../../engine/assistantBrain';
+import { compileFromFields } from '../../engine/promptCompiler';
 
 export default function StudioPage() {
   const [model, setModel] = useState<VolcanoModel>('chatgpt_image_1_5');
   const [learningMode, setLearningMode] = useState<LearningMode>('beginner');
-  const [activeTab, setActiveTab] = useState<TabKey>('online');
-
-  const [fields, setFields] = useState<PromptFields>(() => ({
-    ...DEFAULT_FIELDS,
-    subject: '',
-  }));
+  const [fields, setFields] = useState<PromptFields>(EMPTY_FIELDS);
 
   const ui = LEARNING_MODE[learningMode];
 
   const compiled = useMemo(() => compileFromFields(model, fields), [model, fields]);
 
-  const warnings = useMemo(
-    () => lintFromFields(model, fields, ui.lintStrictness),
-    [model, fields, ui.lintStrictness]
-  );
+  // expose compiled for project version saving
+  if (typeof window !== 'undefined') (window as any).__VOLCANO_COMPILED_PROMPT__ = compiled;
 
-  const modelTips = useMemo(() => suggestForModel(model), [model]);
+  const brain = useMemo(() => analyzePrompt(fields), [fields]);
 
-  const missingSuggestions = useMemo(() => suggestModifiersFromFields(fields), [fields]);
+  const setSubject = (s: string) => setFields((prev) => ({ ...prev, subject: s }));
 
-  const brain = useMemo(() => {
-    return assistantBrain({
-      model,
-      learningMode,
-      fields,
-      compiledPrompt: compiled,
-      warnings,
-    });
-  }, [model, learningMode, fields, compiled, warnings]);
-
-  const setSubject = (v: string) => setFields((prev) => ({ ...prev, subject: v }));
-
-  // Smart routing add
-  const addAuto = (token: string, hintField?: PromptFieldKey) => {
-    const cleaned = (token ?? '').trim();
-    if (!cleaned) return;
-
-    // Beginner mode: do not force negatives implicitly
-    const forced = learningMode === 'beginner' ? undefined : hintField;
-
-    setFields((prev) => addSmart(prev, cleaned, forced));
+  const addToField = (k: PromptFieldKey, t: string) => {
+    const token = (t ?? '').trim();
+    if (!token) return;
+    setFields((prev) => addSmart(prev, token, k));
   };
 
-  const removeFromField = (key: PromptFieldKey, idx: number) => {
+  const removeFromField = (k: PromptFieldKey, idx: number) => {
     setFields((prev) => {
-      const next: PromptFields = { ...prev };
-      const arr = [...(next[key] as string[])];
-      arr.splice(idx, 1);
-      (next as any)[key] = arr;
+      const next = { ...prev } as any;
+      next[k] = (prev as any)[k].filter((_: any, i: number) => i !== idx);
       return next;
     });
   };
 
-  const applyAction = (action: { token: string; target?: PromptFieldKey }) => {
-    addAuto(action.token, action.target);
+  /**
+   * Smart add (auto-field routing)
+   * - Beginner mode should NOT force anything into negative implicitly
+   */
+  const addAuto = (token: string, hintField?: PromptFieldKey) => {
+    const t = (token ?? '').trim();
+    if (!t) return;
+
+    // ✅ FIX: ui.lintStrictness is not numeric. Use learningMode directly.
+    const forced = learningMode === 'beginner' ? undefined : hintField;
+
+    setFields((prev) => addSmart(prev, t, forced));
+  };
+
+  const applyTokens = (k: PromptFieldKey, tokens: string[]) => {
+    tokens.forEach((t) => addToField(k, t));
   };
 
   const autoImprove = () => {
-    brain.nextActions.slice(0, ui.maxSuggestions).forEach((a) => applyAction(a));
+    const top = brain.actions.slice(0, 3);
+    top.forEach((a) => applyTokens(a.field, a.tokens));
+
+    // baseline negatives for beginners
+    if (learningMode === 'beginner' && fields.negative.length === 0) {
+      ['blurry', 'low quality', 'watermark', 'text', 'extra fingers'].forEach((n) => addToField('negative', n));
+    }
   };
 
   return (
-    <main className="studio">
+    <main className="studioShell">
       <header className="topbar">
         <div className="brand">
           <div className="badge">VOLCANO</div>
           <div>
-            <div className="title">Virtuoso AI Art Assistant</div>
-            <div className="subtitle">AI-level prompt engineering studio</div>
+            <div className="title">Virtuoso Prompt Studio</div>
+            <div className="subtitle">AI-level prompt engineering for Image Gen 1.5 + Nano Banana Pro</div>
           </div>
         </div>
 
@@ -111,94 +95,24 @@ export default function StudioPage() {
         </div>
       </header>
 
-      <ProjectBar model={model} learningMode={learningMode} fields={fields} setFields={setFields} />
-
-      <section className="grid">
-        <section className="col main">
-          <PromptBuilder
-            learningMode={learningMode}
-            model={model}
+      <section className="studioGrid">
+        <section className="col left">
+          <ProjectBar
             fields={fields}
-            setSubject={setSubject}
-            onAddToken={addAuto}
+            onLoad={(f) => setFields(f)}
+            onSavedVersion={() => {
+              // no-op; ProjectBar reads window.__VOLCANO_COMPILED_PROMPT__
+            }}
           />
 
-          <PromptPreviewV4
-            model={model}
+          <PromptBuilder
             fields={fields}
-            compiled={compiled}
-            onRemoveToken={(fieldKey, idx) => removeFromField(fieldKey, idx)}
+            setSubject={setSubject}
+            addToField={addToField}
+            removeFromField={removeFromField}
           />
         </section>
 
-        <aside className="col side">
-          <div className="tabs mini">
-            {([
-              ['online', 'Online'],
-              ['style', 'Style DNA'],
-              ['color', 'Color'],
-              ['image', 'Image'],
-              ['explain', 'Explain'],
-            ] as const).map(([k, label]) => (
-              <button
-                key={k}
-                className={activeTab === k ? 'tab active' : 'tab'}
-                onClick={() => setActiveTab(k)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          <AssistantPanel
-            model={model}
-            learningMode={learningMode}
-            score={brain.score}
-            scoreReasons={brain.scoreReasons}
-            warnings={warnings}
-            modelTips={modelTips}
-            missingSuggestions={missingSuggestions}
-            nextActions={brain.nextActions}
-            onApplyAction={applyAction}
-            onAutoImprove={autoImprove}
-          />
-
-          {activeTab === 'online' && (
-            <OnlineWorkbench subject={fields.subject} onAdd={(token, hint) => addAuto(token, hint)} />
-          )}
-
-          {activeTab === 'style' && (
-            <StyleDNABlender
-              onApply={(pack) => {
-                pack.core.forEach((t) => addAuto(t, 'style'));
-                pack.motifs.forEach((t) => addAuto(t, 'composition'));
-                pack.lighting.forEach((t) => addAuto(t, 'lighting'));
-                pack.camera.forEach((t) => addAuto(t, 'camera'));
-                pack.materials.forEach((t) => addAuto(t, 'materials'));
-                pack.colorBias.forEach((t) => addAuto(t, 'color'));
-                pack.bridge.forEach((t) => addAuto(t));
-              }}
-            />
-          )}
-
-          {activeTab === 'color' && (
-            <ColorIntelligence onAddColorWords={(words) => words.forEach((w) => addAuto(w, 'color'))} />
-          )}
-
-          {activeTab === 'image' && (
-            <ImageReferenceInput onExtract={(info) => info.suggestions.forEach((t) => addAuto(t))} />
-          )}
-
-          {activeTab === 'explain' &&
-            (ui.showExplain ? (
-              <ExplainPrompt model={model} fields={fields} compiled={compiled} />
-            ) : (
-              <div className="card mutedSmall">
-                Explain mode is hidden in PRO learning mode. Switch to Beginner/Intermediate.
-              </div>
-            ))}
-        </aside>
-      </section>
-    </main>
-  );
-    }
+        <section className="col mid">
+          <PromptOutput model={model} compiled={compiled} />
+          <ClarityCheck text={compiled
