@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 
+// Engine
 import type { VolcanoModel } from '../../engine/modelProfiles';
 import type { LearningMode } from '../../engine/learningModes';
 import { LEARNING_MODE } from '../../engine/learningModes';
@@ -11,30 +12,42 @@ import { DEFAULT_FIELDS } from '../../engine/promptSchema';
 
 import { compileFromFields } from '../../engine/promptCompiler';
 import { lintFromFields } from '../../engine/qualityLinter';
-import { suggestForModel } from '../../engine/modelAdvisor';
-import { suggestModifiersFromFields } from '../../engine/modifierSuggester';
-import { assistantBrain } from '../../engine/assistantBrain';
 import { addSmart } from '../../engine/tokenRouter';
 
+// UI Components (these match what your build log shows you’re using)
 import { LearningModeSwitch } from '../../components/LearningModeSwitch';
 import { ModeSwitch } from '../../components/ModeSwitch';
+import { ProjectBar } from '../../components/ProjectBar';
 import { PromptBuilder } from '../../components/PromptBuilder';
-import { PromptPreviewV4 } from '../../components/PromptPreviewV4';
+import { PromptOutput } from '../../components/PromptOutput';
+import { ClarityCheck } from '../../components/ClarityCheck';
 import { AssistantPanel } from '../../components/AssistantPanel';
 import { OnlineWorkbench } from '../../components/OnlineWorkbench';
-import { StyleDNABlender } from '../../components/StyleDNABlender';
-import { ColorIntelligence } from '../../components/ColorIntelligence';
-import { ImageReferenceInput } from '../../components/ImageReferenceInput';
-import { ExplainPrompt } from '../../components/ExplainPrompt';
-import { ProjectBar } from '../../components/ProjectBar';
-
-type TabKey = 'studio' | 'online' | 'style' | 'color' | 'image' | 'explain';
 
 export default function StudioPage() {
   const [model, setModel] = useState<VolcanoModel>('chatgpt_image_1_5');
   const [learningMode, setLearningMode] = useState<LearningMode>('beginner');
-  const [activeTab, setActiveTab] = useState<TabKey>('studio');
 
+  const ui = LEARNING_MODE[learningMode];
+
+  const [fields, setFields] = useState<PromptFields>(() => ({
+    ...DEFAULT_FIELDS,
+    subject: '',
+  }));
+
+  const compiled = useMemo(() => compileFromFields(model, fields), [model, fields]);
+
+  const warnings = useMemo(
+    () => lintFromFields(model, fields, ui.lintStrictness),
+    [model, fields, ui.lintStrictness]
+  );
+
+  // ---- Helpers ----
+
+  const setSubject = (v: string) => setFields((prev) => ({ ...prev, subject: v }));
+
+  const addToField = (key: PromptFieldKey, token: string) => {
+    const t = (token ?? '').trim
   const [fields, setFields] = useState<PromptFields>(() => ({
     ...DEFAULT_FIELDS,
     subject: '',
