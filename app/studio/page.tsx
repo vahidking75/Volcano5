@@ -20,21 +20,24 @@ import { addSmart } from '../../engine/tokenRouter';
 import { analyzePrompt } from '../../engine/assistantBrain';
 import { compileFromFields } from '../../engine/promptCompiler';
 
-export default function StudioPage() {
+export default function StudioPage(): JSX.Element {
   const [model, setModel] = useState<VolcanoModel>('chatgpt_image_1_5');
   const [learningMode, setLearningMode] = useState<LearningMode>('beginner');
   const [fields, setFields] = useState<PromptFields>(EMPTY_FIELDS);
 
   const ui = LEARNING_MODE[learningMode];
 
-  const compiled = useMemo(() => compileFromFields(model, fields), [model, fields]);
+  const compiled = useMemo(() => {
+    return compileFromFields(model, fields);
+  }, [model, fields]);
 
-  // expose compiled for project version saving
-  if (typeof window !== 'undefined') (window as any).__VOLCANO_COMPILED_PROMPT__ = compiled;
+  const brain = useMemo(() => {
+    return analyzePrompt(fields);
+  }, [fields]);
 
-  const brain = useMemo(() => analyzePrompt(fields), [fields]);
-
-  const setSubject = (s: string) => setFields((prev) => ({ ...prev, subject: s }));
+  const setSubject = (s: string) => {
+    setFields((prev) => ({ ...prev, subject: s }));
+  };
 
   const addToField = (k: PromptFieldKey, t: string) => {
     const token = (t ?? '').trim();
@@ -44,21 +47,17 @@ export default function StudioPage() {
 
   const removeFromField = (k: PromptFieldKey, idx: number) => {
     setFields((prev) => {
-      const next = { ...prev } as any;
+      const next: any = { ...prev };
       next[k] = (prev as any)[k].filter((_: any, i: number) => i !== idx);
-      return next;
+      return next as PromptFields;
     });
   };
 
-  /**
-   * Smart add (auto-field routing)
-   * - Beginner mode should NOT force anything into negative implicitly
-   */
   const addAuto = (token: string, hintField?: PromptFieldKey) => {
     const t = (token ?? '').trim();
     if (!t) return;
 
-    // ✅ FIX: ui.lintStrictness is not numeric. Use learningMode directly.
+    // Beginner mode: avoid implicitly forcing negatives
     const forced = learningMode === 'beginner' ? undefined : hintField;
 
     setFields((prev) => addSmart(prev, t, forced));
@@ -69,14 +68,22 @@ export default function StudioPage() {
   };
 
   const autoImprove = () => {
-    const top = brain.actions.slice(0, 3);
-    top.forEach((a) => applyTokens(a.field, a.tokens));
+    const top = (brain.actions ?? []).slice(0, 3);
+    top.forEach((a: any) => {
+      applyTokens(a.field as PromptFieldKey, a.tokens as string[]);
+    });
 
-    // baseline negatives for beginners
     if (learningMode === 'beginner' && fields.negative.length === 0) {
-      ['blurry', 'low quality', 'watermark', 'text', 'extra fingers'].forEach((n) => addToField('negative', n));
+      ['blurry', 'low quality', 'watermark', 'text', 'extra fingers'].forEach((n) =>
+        addToField('negative', n)
+      );
     }
   };
+
+  // Optional: expose compiled prompt for other components if they read it
+  if (typeof window !== 'undefined') {
+    (window as any).__VOLCANO_COMPILED_PROMPT__ = compiled;
+  }
 
   return (
     <main className="studioShell">
@@ -85,7 +92,9 @@ export default function StudioPage() {
           <div className="badge">VOLCANO</div>
           <div>
             <div className="title">Virtuoso Prompt Studio</div>
-            <div className="subtitle">AI-level prompt engineering for Image Gen 1.5 + Nano Banana Pro</div>
+            <div className="subtitle">
+              AI-level prompt engineering for Image Gen 1.5 + Nano Banana Pro
+            </div>
           </div>
         </div>
 
@@ -99,10 +108,8 @@ export default function StudioPage() {
         <section className="col left">
           <ProjectBar
             fields={fields}
-            onLoad={(f) => setFields(f)}
-            onSavedVersion={() => {
-              // no-op; ProjectBar reads window.__VOLCANO_COMPILED_PROMPT__
-            }}
+            onLoad={(f: PromptFields) => setFields(f)}
+            onSavedVersion={() => {}}
           />
 
           <PromptBuilder
@@ -115,4 +122,14 @@ export default function StudioPage() {
 
         <section className="col mid">
           <PromptOutput model={model} compiled={compiled} />
-          <ClarityCheck text={compiled
+          <ClarityCheck text={compiled} />
+        </section>
+
+        <aside className="col right">
+          <AssistantPanel fields={fields} onApplyTokens={applyTokens} onAutoImprove={autoImprove} />
+          <OnlineWorkbench onAdd={addAuto} />
+        </aside>
+      </section>
+    </main>
+  );
+    }
